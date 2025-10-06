@@ -1,2 +1,2 @@
 # Project_A_Himanshu
-This is my repo for Project A
+I will be exploring the prediction of outcome of Tennis players win or loss, mainly using Logistic regression, ELO
