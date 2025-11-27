@@ -1,0 +1,296 @@
+---
+title: "logistic_and_elo"
+output: pdf_document
+date: "2025-10-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+#libraries
+library(tidyverse)
+library(glmnet)
+library(dplyr)
+library(yardstick)
+```
+
+```{r}
+#uploading the cleaned 2000-2002 dataset
+
+cd <- read_csv("./data/test_clean.csv")
+```
+
+```{r}
+cd
+
+```
+
+
+```{r}
+cd<- cd %>% mutate(outcome = as.factor(outcome),# changing the dataypes
+                   surface = as.factor(surface))
+cd <- cd %>% mutate(winner_rank = as.integer(winner_rank),
+                    loser_rank = as.integer(loser_rank),
+                    rank_point_diff = as.integer(rank_point_diff),
+                    tourney_level = as.factor(tourney_level),
+                    year = as.integer(year),
+                    winner_rank_points = as.integer(winner_rank_points),
+                    loser_rank_points= as.integer(loser_rank_points))
+cd <- cd %>% rename(tour_lvl = tourney_level) #renaming the colomn
+cd
+
+```
+
+```{r}
+train_log <- cd %>% filter(year >= 2000 , year <= 2018)
+test_log <- cd %>% filter(year == 2019)
+
+train_log
+```
+
+```{r}
+test_log
+```
+
+
+```{r}
+#fitting the logistic model
+
+logit_model <- glm(
+  outcome ~ 0 + rank_point_diff,
+  data = train_log,
+  family = binomial(link = "logit")
+)
+
+#We removed the intercept so that the logistic model behaves like Elo - predicting a 50-50 chance when players have equal ranking difference. This gives a clean, interpretable baseline model and matches the structure the professor requested.
+
+summary(logit_model) 
+
+```
+NULL deviance: 79,676
+(deviance when the model predicts only the average outcome)
+
+Residual deviance: 100
+(after adding ranking_diff)
+
+This is an enormous reduction,The logistic model fits the data extremely well when outcome is defined as “higher-ranked player wins.
+
+$$
+\text{logit}(p_i) = \log \left( \frac{p_i}{1 - p_i} \right)
+    = \beta_1 \cdot \text{rank\_point\_diff}_i
+$$
+
+
+```{r}
+anova(logit_model)
+```
+
+so here I ran the logistic model using the ranking difference as the predictor and removed the intercept (~ 0 + ranking_diff). The coefficient is positive (0.0043) and highly significant (p < 2e-16), suggesting that larger ranking differences strongly increase the probability of the higher-ranked player winning. The absence of an intercept ensures a 50% predicted win probability when players are equally matched.
+
+
+```{r}
+#plotting
+train_log$predicted_prob <- predict(logit_model, type = "response")
+ggplot(train_log, aes(x = rank_point_diff, y = predicted_prob)) +
+  geom_point()
+```
+
+
+# TEST DATA
+```{r}
+test_log$predicted_prob <- predict(
+  logit_model,
+  newdata = test_log,
+  type = "response"
+)
+
+test_log$pred_class <- ifelse(test_log$predicted_prob > 0.5, 1, 0)
+
+test_log$outcome    <- factor(test_log$outcome,    levels = c(0,1))
+test_log$pred_class <- factor(test_log$pred_class, levels = c(0,1))
+
+```
+
+
+```{r}
+# confusion matrix of test data to calculate the acuracy
+
+conf_mat(test_log, truth = outcome, estimate = pred_class)
+```
+```{r}
+accuracy(test_log, truth = outcome, estimate = pred_class)
+```
+Accuracy is a perefect 1 - This also highlights a limitation of the baseline model and motivates the need for an extended model that includes contextual variables such as surface or tournament level.
+
+#ROC CURVE
+```{r}
+test_log_roc <- test_log %>%
+  mutate(
+    outcome = factor(outcome, levels = c(0,1)),   # 0 = negative, 1 = positive
+    predicted_prob = as.numeric(predicted_prob)
+  )
+
+roc_data <- roc_curve(test_log_roc, truth = outcome, predicted_prob,
+                      event_level = "second")
+autoplot(roc_data) +
+  labs(
+    title = "ROC Curve – Logistic Regression (Test Set)",
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+
+
+```
+
+```{r}
+ roc_auc(test_log_roc, truth = outcome, predicted_prob,
+        event_level = "second")
+
+```
+
+```{r}
+
+```
+
+
+#Log loss
+
+```{r}
+y_true <- as.numeric(as.character(test_log$outcome))
+p_pred <- test_log$predicted_prob
+
+log_loss <- -mean(y_true * log(p_pred) + (1 - y_true) * log(1 - p_pred))
+log_loss
+
+
+```
+$$
+\text{LogLoss} = -\frac{1}{n} \sum_{i=1}^n 
+\Big[ y_i \log(p_i) + (1 - y_i)\log(1 - p_i) \Big]
+$$
+
+
+#Brier score
+```{r}
+brier <- mean((p_pred - y_true)^2)
+brier
+
+```
+$$
+\text{BrierScore} = \frac{1}{n} \sum_{i=1}^n (p_i - y_i)^2
+$$
+
+
+
+
+
+extnded model
+```{r}
+logit_ext1 <- glm(
+  outcome ~ 0 + rank_point_diff + surface + tour_lvl,
+  data   = train_log,
+  family = binomial(link = "logit")
+)
+
+summary(logit_ext1)
+
+
+
+```
+```{r}
+anova(logit_ext1)   # deviance / significance like before
+```
+Surface contributes some predictive information. lets look into it a bit more.
+
+
+```{r}
+logit_surf <- glm(
+  outcome ~ 0 + rank_point_diff * surface + tour_lvl,
+  data = train_log,
+  family = binomial(link = "logit")
+)
+
+summary(logit_surf)
+```
+```{r}
+anova(logit_ext1,logit_surf,test = "Chisq")
+```
+# TESTING EXTENDED MODEL
+```{r}
+test_log <- test_log %>%
+  mutate(
+    surface    = factor(surface,    levels = levels(train_log$surface)),
+    tour_lvl = factor(tour_lvl, levels = levels(train_log$tour_lvl))
+  )
+
+# testing
+test_log$pred_prob_ext1 <- predict(
+  logit_ext1,
+  newdata = test_log,
+  type = "response"
+)
+
+```
+
+```{r}
+test_log$pred_class_ext1 <- ifelse(test_log$pred_prob_ext1 > 0.5, 1, 0) #converting classes
+
+```
+
+```{r}
+test_log$outcome         <- factor(test_log$outcome,         levels = c(0,1))
+test_log$pred_class_ext1 <- factor(test_log$pred_class_ext1, levels = c(0,1))
+
+```
+
+```{r}
+conf_mat(test_log, truth = outcome, estimate = pred_class_ext1)
+
+```
+```{r}
+accuracy(test_log, truth = outcome, estimate = pred_class_ext1)
+```
+
+```{r}
+roc_data_ext1 <- roc_curve(
+  test_log,
+  truth = outcome,
+  pred_prob_ext1,
+  event_level = "second"
+)
+
+autoplot(roc_data_ext1) +
+  labs(
+    title = "ROC Curve – Extended Logistic Model",
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+```
+AUC would obv be 1
+
+```{r}
+y_true_ext1 <- as.numeric(as.character(test_log$outcome))
+p_ext1 <- test_log$pred_prob_ext1
+
+log_loss_ext1 <- -mean(
+  y_true * log(p_ext1) + (1 - y_true) * log(1 - p_ext1)
+)
+
+log_loss_ext1
+
+```
+```{r}
+brier_ext1 <- mean((p_ext1 - y_true_ext1)^2)
+brier_ext1
+
+```
+
+

@@ -1,0 +1,91 @@
+---
+title: "ELO_model"
+output: pdf_document
+date: "2025-11-10"
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE, show_col_types = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(elo)
+library(tidyverse)
+library(dplyr)
+library(inspectdf)
+```
+
+```{r}
+elo_formula <- function(Ri,Rj) { 1/ (1+ 10^(Rj-Ri)/400)}
+
+
+elo_update_pair <- function(Ri, Rj, outcome_i, K = 32) {
+  Pi <- elo_expected(Ri, Rj)
+  Rinew <- Ri + K * (outcome_i - Pi)
+  Rjnew <- Rj + K * ((1 - outcome_i) - (1 - Pi))
+  list(Ri = Rinew, Rj = Rjnew, p_i = Pi)
+}
+
+```
+
+```{r}
+
+elo_data <- read_csv("./data/test_clean.csv")
+
+train <- elo_data %>% filter(year >= 2000 , year <= 2018)
+test <- elo_data %>% filter(year == 2019)
+
+train
+```
+
+```{r}
+test
+```
+
+
+```{r}
+matches <- train %>%
+  mutate(
+    player_i = if_else(winner_rank_points >= loser_rank_points, winner_name, loser_name),
+    player_j = if_else(winner_rank_points >= loser_rank_points, loser_name, winner_name),
+  ) %>%
+  arrange(year)
+
+
+matches
+```
+
+```{r}
+elo_train <- elo.run(
+  outcome ~ player_i + player_j,
+  data = matches,
+  k = 32
+)
+
+ratings_vec <- final.elos(elo_train)   # named vector
+
+ratings_2018 <- data.frame(
+  player = names(ratings_vec),
+  rating = as.numeric(ratings_vec))
+```
+
+TEST DATA
+
+```{r}
+matches_test <- test %>%
+  mutate(
+    player_i = if_else(winner_rank_points >= loser_rank_points, winner_name, loser_name),
+    player_j = if_else(winner_rank_points >= loser_rank_points, loser_name, winner_name),
+  ) %>%
+  arrange(year)
+```
+
+
+```{r}
+elo_preds <- predict(
+  elo_train,
+  newdata = matches_test,
+  type = "response"
+)
+```
+
